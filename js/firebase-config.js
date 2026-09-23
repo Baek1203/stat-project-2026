@@ -5,10 +5,10 @@
 // (이 값들은 비밀번호가 아니어서 GitHub에 올려도 됩니다. 자료는 보안 규칙이 지킵니다.)
 // ─────────────────────────────────────────────────────────────
 export const firebaseConfig = {
-  apiKey: "여기에_apiKey",
-  authDomain: "여기에_authDomain",
-  projectId: "여기에_projectId",
-  storageBucket: "여기에_storageBucket",
-  messagingSenderId: "여기에_messagingSenderId",
-  appId: "여기에_appId"
+  apiKey: "AIzaSyCZNfMJX7x2hQje-NUu2ZBNdbs_28dnboU",
+  authDomain: "stat-project-2026.firebaseapp.com",
+  projectId: "stat-project-2026",
+  storageBucket: "stat-project-2026.firebasestorage.app",
+  messagingSenderId: "492339919566",
+  appId: "1:492339919566:web:8b02d5e0055b157dec2e9f"
 };
