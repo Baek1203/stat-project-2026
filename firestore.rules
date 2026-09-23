@@ -1,0 +1,147 @@
+rules_version = '2';
+
+// 통계 프로젝트 웹 앱 — Firestore 보안 규칙
+// Firebase 콘솔 → Firestore Database → '규칙' 탭에 전체를 붙여 넣고 '게시'를 누르세요.
+// 반드시 아래 teacherEmails()의 이메일을 선생님의 구글 계정으로 바꾸세요.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ▼▼▼ 선생님 구글 계정(소문자로, 여러 명이면 쉼표로 구분) ▼▼▼
+    function teacherEmails() {
+      return ['teacher@example.com'];
+    }
+    // ▲▲▲ 여기까지만 고치면 됩니다 ▲▲▲
+
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isTeacher() {
+      return signedIn()
+        && request.auth.token.get('email_verified', false) == true
+        && request.auth.token.get('email', '').lower() in teacherEmails();
+    }
+    function memberPath() {
+      return /databases/$(database)/documents/members/$(request.auth.uid);
+    }
+    function isMember() {
+      return signedIn() && exists(memberPath());
+    }
+    function myTeam() {
+      return get(memberPath()).data.team;
+    }
+    function isMemberOf(team) {
+      return isMember() && myTeam() == team;
+    }
+    function seatOwner(seatId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/seats/$(seatId))
+        && get(/databases/$(database)/documents/seats/$(seatId)).data.uid == request.auth.uid;
+    }
+    // 제출해서 잠긴 노트 칸은 학생이 고칠 수 없다(선생님은 잠금을 풀 수 있다).
+    function locked(sec) {
+      return resource.data.get(sec, {}).get('submitted', false) == true
+        && request.resource.data.get(sec, {}) != resource.data.get(sec, {});
+    }
+
+    // 자료 목록(학생 공개 정보)
+    match /pool/{docId} {
+      allow read: if signedIn();
+      allow write: if isTeacher();
+    }
+
+    // 원자료: 우리 모둠이 신청한 카드만 읽을 수 있다.
+    match /carddata/{cardId} {
+      allow read: if isTeacher()
+        || (isMember()
+            && cardId in get(/databases/$(database)/documents/teams/$(myTeam())).data.get('released', []));
+      allow write: if isTeacher();
+    }
+
+    // 카드 유형·함정 정보: 선생님만
+    match /teacherinfo/{docId} {
+      allow read, write: if isTeacher();
+    }
+
+    // 반: 단계 열기·닫기는 선생님만
+    match /classes/{classId} {
+      allow get: if signedIn();
+      allow list, create, update, delete: if isTeacher();
+    }
+
+    // 모둠 상태(입장 코드 = 문서 이름). 코드를 아는 사람만 읽을 수 있다.
+    match /teams/{teamId} {
+      allow get: if signedIn();
+      allow list, create, delete: if isTeacher();
+      // 학생: 주제·인원·교사 확인·질문 카드는 못 바꿈, 받은 자료는 늘리기만(최대 6장), 제출한 신청서·재신청은 못 바꿈
+      allow update: if isTeacher()
+        || (isMemberOf(teamId)
+            && !request.resource.data.diff(resource.data).affectedKeys()
+                 .hasAny(['classId', 'className', 'teamNo', 'size', 'topic', 'planCheck', 'questions', 'createdAt', 'seatReset'])
+            && request.resource.data.get('released', []).size() <= 6
+            && request.resource.data.get('released', []).hasAll(resource.data.get('released', []))
+            && (!('request' in resource.data) || request.resource.data.request == resource.data.request)
+            && (!('rerequest' in resource.data) || request.resource.data.rerequest == resource.data.rerequest));
+    }
+
+    // 모둠이 함께 쓰는 활동지
+    match /teamdocs/{teamId} {
+      allow get: if isTeacher() || isMemberOf(teamId);
+      allow create, update: if isTeacher() || isMemberOf(teamId);
+      allow list, delete: if isTeacher();
+    }
+
+    // 자리(모둠 코드-번호)와 비밀번호 확인값. 학생은 읽을 수 없다.
+    match /seats/{seatId} {
+      allow read, delete: if isTeacher();
+      allow create: if signedIn()
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.pinHash is string
+        && request.resource.data.pinHash.size() == 64
+        && request.resource.data.num is int
+        && seatId == request.resource.data.team + '-' + string(request.resource.data.num)
+        && exists(/databases/$(database)/documents/teams/$(request.resource.data.team))
+        && request.resource.data.num >= 1
+        && request.resource.data.num <= get(/databases/$(database)/documents/teams/$(request.resource.data.team)).data.size;
+      allow update: if isTeacher()
+        || (signedIn()
+            && request.resource.data.uid == request.auth.uid
+            && request.resource.data.pinHash == resource.data.pinHash
+            && request.resource.data.team == resource.data.team
+            && request.resource.data.num == resource.data.num);
+    }
+
+    // 이 기기가 어느 모둠인지: 같은 요청에서 자리(비밀번호 확인)를 차지한 경우에만 만들 수 있다.
+    match /members/{uid} {
+      allow get: if (signedIn() && request.auth.uid == uid) || isTeacher();
+      allow list: if isTeacher();
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && exists(/databases/$(database)/documents/teams/$(request.resource.data.team))
+        && request.resource.data.seat == request.resource.data.team + '-' + string(request.resource.data.num)
+        && getAfter(/databases/$(database)/documents/seats/$(request.resource.data.seat)).data.uid == request.auth.uid;
+      allow delete: if (signedIn() && request.auth.uid == uid) || isTeacher();
+    }
+
+    // 개인 탐구 노트: 본인과 선생님만
+    match /notes/{seatId} {
+      allow get: if isTeacher() || seatOwner(seatId);
+      allow list: if isTeacher();
+      allow create: if isTeacher() || seatOwner(seatId);
+      allow update: if isTeacher()
+        || (seatOwner(seatId)
+            && !locked('n1') && !locked('n2') && !locked('n3') && !locked('n4') && !locked('s6'));
+      allow delete: if isTeacher();
+    }
+
+    // 분석 결과 그림(압축해서 문서에 저장, 1장 1MB 미만)
+    match /images/{imageId} {
+      allow get: if isTeacher() || isMemberOf(resource.data.team);
+      allow list: if isTeacher();
+      allow create: if isMemberOf(request.resource.data.team)
+        && request.resource.data.bytes is bytes
+        && request.resource.data.bytes.size() <= 1000000;
+      allow update: if isTeacher();
+      allow delete: if isTeacher() || isMemberOf(resource.data.team);
+    }
+  }
+}
